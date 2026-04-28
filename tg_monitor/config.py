@@ -11,6 +11,7 @@ class Config:
     api_hash: str = ""
     keywords: List[str] = field(default_factory=list)
     excluded_senders: List[str] = field(default_factory=list)
+    backfill_minutes: int = 5
     notification_sound: bool = True
     launch_at_login: bool = True
 
@@ -24,6 +25,7 @@ def load() -> Config:
         api_hash=str(raw.get("api_hash", "")),
         keywords=list(raw.get("keywords", [])),
         excluded_senders=list(raw.get("excluded_senders", [])),
+        backfill_minutes=int(raw.get("backfill_minutes", 5)),
         notification_sound=bool(raw.get("notification_sound", True)),
         launch_at_login=bool(raw.get("launch_at_login", True)),
     )

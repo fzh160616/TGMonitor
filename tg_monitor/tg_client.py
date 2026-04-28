@@ -11,6 +11,7 @@ from telethon.tl.types import (
     Chat,
     MessageEntityMention,
     MessageEntityMentionName,
+    PeerUser,
     User,
 )
 
@@ -34,8 +35,9 @@ class Hit:
 
 
 class TgWorker:
-    def __init__(self, hits: "queue.Queue[Hit]") -> None:
+    def __init__(self, hits: "queue.Queue[Hit]", status: "queue.Queue[str]") -> None:
         self.hits = hits
+        self.status = status
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client: Optional[TelegramClient] = None
@@ -62,6 +64,7 @@ class TgWorker:
         except Exception:
             log.exception("tg worker crashed")
         finally:
+            self.status.put("disconnected")
             loop.close()
 
     async def _main(self) -> None:
@@ -93,7 +96,13 @@ class TgWorker:
             except Exception:
                 log.exception("handler failed for message")
 
+        self.status.put("connected")
         log.info("listening for new messages…")
+
+        c = cfg.load()
+        if c.backfill_minutes > 0:
+            asyncio.create_task(self._backfill(client, c.backfill_minutes))
+
         run_task = asyncio.create_task(client.run_until_disconnected())
         stop_task = asyncio.create_task(self._stop_event.wait())
         done, pending = await asyncio.wait(
@@ -154,6 +163,78 @@ class TgWorker:
             result=result,
         )
         self.hits.put(hit)
+
+
+    async def _backfill(self, client: TelegramClient, minutes: int) -> None:
+        import time as _time
+        cutoff = _time.time() - minutes * 60
+        log.info("backfill: scanning last %d min…", minutes)
+        async for dialog in client.iter_dialogs():
+            try:
+                async for msg in client.iter_messages(dialog.id, limit=30):
+                    if msg.date.timestamp() < cutoff:
+                        break
+                    await self._process_raw(client, msg, dialog)
+            except Exception:
+                log.exception("backfill: error in dialog %s", dialog.id)
+        log.info("backfill: done")
+
+    async def _process_raw(self, client: TelegramClient, msg, dialog) -> None:
+        """Process a raw Message from backfill (shares match logic with _handle)."""
+        if msg.out:
+            return
+        c = cfg.load()
+        raw_sender_id = msg.sender_id or 0
+
+        if _is_excluded(raw_sender_id, None, c.excluded_senders):
+            return
+
+        text = msg.message or ""
+        entities: list[EntityMention] = []
+        if msg.entities:
+            for ent in msg.entities:
+                if isinstance(ent, MessageEntityMentionName):
+                    entities.append(EntityMention(user_id=ent.user_id))
+                elif isinstance(ent, MessageEntityMention):
+                    handle = text[ent.offset: ent.offset + ent.length].lstrip("@")
+                    entities.append(EntityMention(username=handle))
+
+        is_private = isinstance(getattr(msg, "peer_id", None), PeerUser)
+
+        result = match(MatchInput(
+            is_private=is_private,
+            text=text,
+            entities=entities,
+            is_reply=False,
+            reply_sender_id=None,
+            me_id=self.me_id,
+            me_username=self.me_username,
+            keywords=c.keywords,
+        ))
+        if result is None:
+            return
+
+        chat = dialog.entity
+        sender = None
+        if raw_sender_id:
+            try:
+                sender = await client.get_entity(raw_sender_id)
+            except Exception:
+                log.debug("backfill: get_entity failed sender_id=%s", raw_sender_id)
+
+        sender_username = getattr(sender, "username", None)
+        if _is_excluded(raw_sender_id, sender_username, c.excluded_senders):
+            return
+
+        self.hits.put(Hit(
+            tg_message_id=msg.id,
+            chat_id=dialog.id,
+            chat_title=_chat_title(chat),
+            sender_id=raw_sender_id,
+            sender_name=_display_name(sender),
+            text=text,
+            result=result,
+        ))
 
 
 def _is_excluded(sender_id: int, username: Optional[str], excluded: list[str]) -> bool:

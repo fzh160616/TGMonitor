@@ -101,7 +101,8 @@ class TGMonitorApp(rumps.App):
         self.config = cfg.load()
         self.store = Store()
         self.hits: "queue.Queue[Hit]" = queue.Queue()
-        self.worker = TgWorker(self.hits)
+        self._status_q: "queue.Queue[str]" = queue.Queue()
+        self.worker = TgWorker(self.hits, self._status_q)
 
         # MenuItems for individual mentions, keyed by mention id, so we can
         # rebuild without losing references.
@@ -136,6 +137,10 @@ class TGMonitorApp(rumps.App):
         )
         self._sound_item.state = self.config.notification_sound
         settings.add(self._sound_item)
+        self._conn_item = rumps.MenuItem("○ 连接中…")
+        self._conn_item.set_callback(None)
+        settings.add(self._conn_item)
+        settings.add(rumps.separator)
         settings.add(rumps.MenuItem("打开数据目录", callback=self._open_data_dir))
         settings.add(rumps.MenuItem("查看日志", callback=self._open_log))
 
@@ -199,6 +204,17 @@ class TGMonitorApp(rumps.App):
     # ------- queue draining (main thread) -------
 
     def _drain_hits(self, _sender) -> None:
+        # Drain connection status events
+        while True:
+            try:
+                status = self._status_q.get_nowait()
+            except queue.Empty:
+                break
+            if status == "connected":
+                self._conn_item.title = "● 已连接"
+            else:
+                self._conn_item.title = "○ 已断开"
+
         drained = False
         while True:
             try:
