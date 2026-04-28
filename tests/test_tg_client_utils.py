@@ -1,4 +1,11 @@
-from tg_monitor.tg_client import _backfill_limit, _raw_is_reply, _raw_reply_msg_id, _reconnect_delay
+from tg_monitor.tg_client import (
+    _backfill_limit,
+    _display_name,
+    _is_excluded,
+    _raw_is_reply,
+    _raw_reply_msg_id,
+    _reconnect_delay,
+)
 
 
 def test_reconnect_delay_starts_at_5():
@@ -50,3 +57,46 @@ def test_raw_reply_msg_id():
 
 def test_raw_reply_msg_id_no_reply():
     assert _raw_reply_msg_id(_FakeMsg(reply_to=None)) is None
+
+
+# --- _is_excluded ---
+
+def test_is_excluded_by_numeric_id():
+    assert _is_excluded(123, None, ["123"]) is True
+
+
+def test_is_excluded_by_username():
+    assert _is_excluded(0, "alice", ["@alice"]) is True
+
+
+def test_is_excluded_username_case_insensitive():
+    assert _is_excluded(0, "Alice", ["@alice"]) is True
+
+
+def test_not_excluded_when_empty_list():
+    assert _is_excluded(123, "alice", []) is False
+
+
+def test_not_excluded_different_id():
+    assert _is_excluded(999, None, ["123"]) is False
+
+
+# --- _display_name ---
+
+class _FakeUser:
+    def __init__(self, first="", last="", username=None):
+        self.first_name = first
+        self.last_name = last
+        self.username = username
+
+
+def test_display_name_full_name():
+    assert _display_name(_FakeUser(first="John", last="Doe")) == "John Doe"
+
+
+def test_display_name_username_fallback():
+    assert _display_name(_FakeUser(username="jdoe")) == "@jdoe"
+
+
+def test_display_name_none():
+    assert _display_name(None) == "(未知)"
