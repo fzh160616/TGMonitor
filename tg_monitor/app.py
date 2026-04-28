@@ -122,6 +122,7 @@ class TGMonitorApp(rumps.App):
         self._mentions_section = rumps.MenuItem("最近提醒")
         mark_all_item = rumps.MenuItem("全部已读", callback=self._mark_all_read)
         self._mentions_section.add(mark_all_item)
+        self._mentions_section.add(rumps.MenuItem("清空消息", callback=self._clear_all_mentions))
         self._mentions_section.add(rumps.separator)
 
         settings = rumps.MenuItem("设置")
@@ -301,6 +302,18 @@ class TGMonitorApp(rumps.App):
         self.store.mark_all_seen()
         self._refresh_mentions()
         self._update_title()
+
+    def _clear_all_mentions(self, _sender) -> None:
+        self._bring_to_front()
+        resp = rumps.alert(
+            title="清空消息",
+            message="将删除所有本地提醒记录，此操作不可撤销。",
+            ok="清空", cancel="取消",
+        )
+        if resp == 1:
+            self.store.clear_all()
+            self._refresh_mentions()
+            self._update_title()
 
     def _edit_keywords(self, _sender) -> None:
         w = rumps.Window(

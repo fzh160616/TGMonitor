@@ -110,6 +110,9 @@ class Store:
             (int(time.time()),),
         )
 
+    def clear_all(self) -> None:
+        self.conn.execute("DELETE FROM mentions")
+
     def unseen_count(self) -> int:
         row = self.conn.execute(
             "SELECT COUNT(*) AS c FROM mentions WHERE seen_at IS NULL"
