@@ -288,8 +288,14 @@ class TGMonitorApp(rumps.App):
                     f"时间: {ts}\n\n"
                     f"{m.text or '(无文本)'}"
                 )
+                self._bring_to_front()
                 rumps.alert(title=m.chat_title, message=body, ok="关闭")
         return _cb
+
+    @staticmethod
+    def _bring_to_front() -> None:
+        from AppKit import NSApp
+        NSApp.activateIgnoringOtherApps_(True)
 
     def _mark_all_read(self, _sender) -> None:
         self.store.mark_all_seen()
@@ -304,6 +310,7 @@ class TGMonitorApp(rumps.App):
             ok="保存", cancel="取消",
             dimensions=(300, 60),
         )
+        self._bring_to_front()
         resp = w.run()
         if resp.clicked:
             self.config.keywords = [k.strip() for k in resp.text.split(",") if k.strip()]
@@ -317,6 +324,7 @@ class TGMonitorApp(rumps.App):
             ok="保存", cancel="取消",
             dimensions=(300, 60),
         )
+        self._bring_to_front()
         resp = w.run()
         if resp.clicked:
             entries = [e.strip() for e in resp.text.split(",") if e.strip()]
@@ -348,6 +356,7 @@ class TGMonitorApp(rumps.App):
 
     def _about(self, _sender) -> None:
         from . import __version__
+        self._bring_to_front()
         rumps.alert(
             title="TG Monitor",
             message=(
