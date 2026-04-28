@@ -188,6 +188,7 @@ class TgWorker:
 
     async def _backfill(self, client: TelegramClient, minutes: int) -> None:
         import time as _time
+        c = cfg.load()  # load once for the entire backfill run
         cutoff = _time.time() - minutes * 60
         limit = _backfill_limit(minutes)
         log.info("backfill: scanning last %d min (limit=%d/dialog)…", minutes, limit)
@@ -198,16 +199,15 @@ class TgWorker:
                 async for msg in client.iter_messages(dialog.id, limit=limit):
                     if msg.date.timestamp() < cutoff:
                         break  # iter_messages is newest-first; stop when too old
-                    await self._process_raw(client, msg, dialog)
+                    await self._process_raw(client, msg, dialog, c)
             except Exception:
                 log.exception("backfill: error in dialog %s", dialog.id)
         log.info("backfill: done")
 
-    async def _process_raw(self, client: TelegramClient, msg, dialog) -> None:
+    async def _process_raw(self, client: TelegramClient, msg, dialog, c: "cfg.Config") -> None:
         """Process a raw Message from backfill (shares match logic with _handle)."""
         if msg.out:
             return
-        c = cfg.load()
         raw_sender_id = msg.sender_id or 0
 
         if _is_excluded(raw_sender_id, None, c.excluded_senders):
