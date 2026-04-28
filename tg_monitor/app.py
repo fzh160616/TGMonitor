@@ -271,16 +271,18 @@ class TGMonitorApp(rumps.App):
     # ------- menu callbacks -------
 
     def _make_toggle_callback(self, mention_id: int):
-        """Click once to mark seen (removes ✓); click again to show full text."""
+        """First click: mark seen + open Telegram. Second click: show full text."""
         def _cb(sender) -> None:
             m = self.store.get(mention_id)
             if m is None:
                 return
             if m.seen_at is None:
-                # First click: mark as read, remove checkmark
+                # First click: mark as read and jump to Telegram
                 self.store.mark_seen(mention_id)
                 sender.state = 0
                 self._update_title()
+                url = _tg_message_url(m.chat_id, m.tg_message_id)
+                subprocess.Popen(["open", url])
             else:
                 # Already read: show full detail
                 ts = datetime.fromtimestamp(m.received_at).strftime("%Y-%m-%d %H:%M:%S")
