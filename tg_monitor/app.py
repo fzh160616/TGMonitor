@@ -10,6 +10,7 @@ from typing import Dict
 import rumps
 
 from . import config as cfg
+from . import history as hist
 from . import notifier
 from .paths import (
     DATA_DIR,
@@ -147,7 +148,9 @@ class TGMonitorApp(rumps.App):
 
         self.menu = [
             self._mentions_section,
-            None,  # separator
+            None,
+            rumps.MenuItem("查看历史…", callback=self._open_history),
+            None,
             settings,
             rumps.MenuItem("关于 TG Monitor", callback=self._about),
             None,
@@ -297,6 +300,9 @@ class TGMonitorApp(rumps.App):
     def _bring_to_front() -> None:
         from AppKit import NSApp
         NSApp.activateIgnoringOtherApps_(True)
+
+    def _open_history(self, _sender) -> None:
+        hist.open_history(self.store)
 
     def _mark_all_read(self, _sender) -> None:
         self.store.mark_all_seen()
