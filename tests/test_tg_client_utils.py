@@ -1,4 +1,4 @@
-from tg_monitor.tg_client import _reconnect_delay
+from tg_monitor.tg_client import _backfill_limit, _reconnect_delay
 
 
 def test_reconnect_delay_starts_at_5():
@@ -12,3 +12,15 @@ def test_reconnect_delay_doubles():
 
 def test_reconnect_delay_caps_at_120():
     assert _reconnect_delay(10) == 120
+
+
+def test_backfill_limit_default():
+    assert _backfill_limit(5) == 100  # max(100, 5*20)=100
+
+
+def test_backfill_limit_scales():
+    assert _backfill_limit(10) == 200  # max(100, 10*20)=200
+
+
+def test_backfill_limit_minimum():
+    assert _backfill_limit(1) == 100  # max(100, 20)=100

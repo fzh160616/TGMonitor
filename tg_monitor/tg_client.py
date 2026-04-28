@@ -189,12 +189,15 @@ class TgWorker:
     async def _backfill(self, client: TelegramClient, minutes: int) -> None:
         import time as _time
         cutoff = _time.time() - minutes * 60
-        log.info("backfill: scanning last %d min…", minutes)
+        limit = _backfill_limit(minutes)
+        log.info("backfill: scanning last %d min (limit=%d/dialog)…", minutes, limit)
         async for dialog in client.iter_dialogs():
+            if self._shutdown.is_set():
+                break
             try:
-                async for msg in client.iter_messages(dialog.id, limit=30):
+                async for msg in client.iter_messages(dialog.id, limit=limit):
                     if msg.date.timestamp() < cutoff:
-                        break
+                        break  # iter_messages is newest-first; stop when too old
                     await self._process_raw(client, msg, dialog)
             except Exception:
                 log.exception("backfill: error in dialog %s", dialog.id)
@@ -311,3 +314,7 @@ def _display_name(obj: object) -> str:
 
 def _reconnect_delay(attempt: int) -> int:
     return min(5 * (2 ** attempt), 120)
+
+
+def _backfill_limit(backfill_minutes: int) -> int:
+    return max(100, backfill_minutes * 20)
