@@ -225,12 +225,24 @@ class TgWorker:
 
         is_private = isinstance(getattr(msg, "peer_id", None), PeerUser)
 
+        is_reply = _raw_is_reply(msg)
+        reply_sender_id: Optional[int] = None
+        if is_reply:
+            reply_msg_id = _raw_reply_msg_id(msg)
+            if reply_msg_id is not None:
+                try:
+                    replied = await client.get_messages(dialog.id, ids=reply_msg_id)
+                    # Use getattr: replied may be MessageEmpty (truthy, no sender_id)
+                    reply_sender_id = getattr(replied, "sender_id", None)
+                except Exception:
+                    log.debug("backfill: get reply msg failed msg_id=%s", reply_msg_id)
+
         result = match(MatchInput(
             is_private=is_private,
             text=text,
             entities=entities,
-            is_reply=False,
-            reply_sender_id=None,
+            is_reply=is_reply,
+            reply_sender_id=reply_sender_id,
             me_id=self.me_id,
             me_username=self.me_username,
             keywords=c.keywords,
@@ -318,3 +330,14 @@ def _reconnect_delay(attempt: int) -> int:
 
 def _backfill_limit(backfill_minutes: int) -> int:
     return max(100, backfill_minutes * 20)
+
+
+def _raw_is_reply(msg: object) -> bool:
+    return getattr(msg, "reply_to", None) is not None
+
+
+def _raw_reply_msg_id(msg: object) -> Optional[int]:
+    rt = getattr(msg, "reply_to", None)
+    if rt is None:
+        return None
+    return getattr(rt, "reply_to_msg_id", None)
