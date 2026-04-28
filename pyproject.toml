@@ -1,0 +1,27 @@
+[project]
+name = "tg-monitor"
+version = "0.1.0"
+description = "macOS menu bar tool that watches Telegram for @ mentions"
+requires-python = ">=3.11"
+dependencies = [
+    "telethon>=1.36",
+    "rumps>=0.4.0",
+    "pyobjc-framework-Cocoa>=10.0",
+]
+
+[project.scripts]
+tg-monitor = "tg_monitor.__main__:main"
+tg-monitor-login = "tg_monitor.login_cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["tg_monitor"]

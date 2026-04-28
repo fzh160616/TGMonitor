@@ -1,0 +1,207 @@
+import asyncio
+import logging
+import queue
+import threading
+from dataclasses import dataclass
+from typing import Optional
+
+from telethon import TelegramClient, events
+from telethon.tl.types import (
+    Channel,
+    Chat,
+    MessageEntityMention,
+    MessageEntityMentionName,
+    User,
+)
+
+from . import config as cfg
+from .matcher import EntityMention, MatchInput, MatchResult, match
+from .paths import SESSION_PATH
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class Hit:
+    """Payload pushed to the main thread when a message matches."""
+    tg_message_id: int
+    chat_id: int
+    chat_title: str
+    sender_id: int
+    sender_name: str
+    text: str
+    result: MatchResult
+
+
+class TgWorker:
+    def __init__(self, hits: "queue.Queue[Hit]") -> None:
+        self.hits = hits
+        self._thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._client: Optional[TelegramClient] = None
+        self._stop_event: Optional[asyncio.Event] = None
+        self.me_id: int = 0
+        self.me_username: Optional[str] = None
+
+    def start(self) -> None:
+        self._thread = threading.Thread(target=self._run, name="tg-worker", daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        if self._loop and self._stop_event:
+            self._loop.call_soon_threadsafe(self._stop_event.set)
+        if self._thread:
+            self._thread.join(timeout=5)
+
+    def _run(self) -> None:
+        loop = asyncio.new_event_loop()
+        self._loop = loop
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(self._main())
+        except Exception:
+            log.exception("tg worker crashed")
+        finally:
+            loop.close()
+
+    async def _main(self) -> None:
+        c = cfg.load()
+        if not c.api_id or not c.api_hash:
+            log.error("missing api_id / api_hash in config; worker exiting")
+            return
+
+        client = TelegramClient(str(SESSION_PATH), c.api_id, c.api_hash)
+        self._client = client
+        self._stop_event = asyncio.Event()
+
+        await client.connect()
+        if not await client.is_user_authorized():
+            log.error("session not authorized; run login flow first")
+            return
+
+        me = await client.get_me()
+        self.me_id = me.id
+        self.me_username = getattr(me, "username", None)
+        log.info("logged in as id=%s username=%s", self.me_id, self.me_username)
+
+        @client.on(events.NewMessage())
+        async def _on_msg(event: events.NewMessage.Event) -> None:
+            if event.message.out:
+                return
+            try:
+                await self._handle(event)
+            except Exception:
+                log.exception("handler failed for message")
+
+        log.info("listening for new messages…")
+        run_task = asyncio.create_task(client.run_until_disconnected())
+        stop_task = asyncio.create_task(self._stop_event.wait())
+        done, pending = await asyncio.wait(
+            {run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+        if client.is_connected():
+            await client.disconnect()
+
+    async def _handle(self, event: events.NewMessage.Event) -> None:
+        c = cfg.load()
+        raw_sender_id = event.sender_id or 0
+
+        # Early exclusion by numeric ID (no network call needed)
+        if _is_excluded(raw_sender_id, None, c.excluded_senders):
+            return
+
+        text = event.message.message or ""
+        entities = _extract_entities(event)
+        reply_sender_id: Optional[int] = None
+        if event.is_reply:
+            try:
+                reply = await event.get_reply_message()
+                if reply is not None:
+                    reply_sender_id = reply.sender_id
+            except Exception:
+                log.exception("get_reply_message failed")
+
+        result = match(MatchInput(
+            is_private=bool(event.is_private),
+            text=text,
+            entities=entities,
+            is_reply=bool(event.is_reply),
+            reply_sender_id=reply_sender_id,
+            me_id=self.me_id,
+            me_username=self.me_username,
+            keywords=c.keywords,
+        ))
+        if result is None:
+            return
+
+        chat = await event.get_chat()
+        sender = await event.get_sender()
+
+        # Second exclusion pass now that we have the sender's username
+        sender_username = getattr(sender, "username", None)
+        if _is_excluded(raw_sender_id, sender_username, c.excluded_senders):
+            return
+
+        hit = Hit(
+            tg_message_id=event.message.id,
+            chat_id=event.chat_id,
+            chat_title=_chat_title(chat),
+            sender_id=getattr(sender, "id", 0) or 0,
+            sender_name=_display_name(sender),
+            text=text,
+            result=result,
+        )
+        self.hits.put(hit)
+
+
+def _is_excluded(sender_id: int, username: Optional[str], excluded: list[str]) -> bool:
+    for entry in excluded:
+        clean = entry.lstrip("@").strip()
+        if clean.isdigit():
+            if sender_id == int(clean):
+                return True
+        elif username and username.lower() == clean.lower():
+            return True
+    return False
+
+
+def _extract_entities(event: events.NewMessage.Event) -> list[EntityMention]:
+    out: list[EntityMention] = []
+    msg = event.message
+    if not msg.entities:
+        return out
+    raw_text = msg.message or ""
+    for ent in msg.entities:
+        if isinstance(ent, MessageEntityMentionName):
+            out.append(EntityMention(user_id=ent.user_id))
+        elif isinstance(ent, MessageEntityMention):
+            handle = raw_text[ent.offset : ent.offset + ent.length].lstrip("@")
+            out.append(EntityMention(username=handle))
+    return out
+
+
+def _chat_title(chat: object) -> str:
+    if isinstance(chat, (Chat, Channel)):
+        return getattr(chat, "title", None) or "(无标题)"
+    if isinstance(chat, User):
+        return _display_name(chat)
+    return "(未知会话)"
+
+
+def _display_name(obj: object) -> str:
+    if obj is None:
+        return "(未知)"
+    first = getattr(obj, "first_name", "") or ""
+    last = getattr(obj, "last_name", "") or ""
+    full = (first + " " + last).strip()
+    if full:
+        return full
+    username = getattr(obj, "username", None)
+    if username:
+        return f"@{username}"
+    title = getattr(obj, "title", None)
+    if title:
+        return title
+    return "(未知)"
