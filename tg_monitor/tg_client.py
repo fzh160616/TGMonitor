@@ -42,6 +42,7 @@ class TgWorker:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client: Optional[TelegramClient] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._shutdown: threading.Event = threading.Event()
         self.me_id: int = 0
         self.me_username: Optional[str] = None
 
@@ -50,19 +51,40 @@ class TgWorker:
         self._thread.start()
 
     def stop(self) -> None:
+        self._shutdown.set()
         if self._loop and self._stop_event:
             self._loop.call_soon_threadsafe(self._stop_event.set)
         if self._thread:
             self._thread.join(timeout=5)
 
     def _run(self) -> None:
+        import time as _time
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
+        attempt = 0
         try:
-            loop.run_until_complete(self._main())
-        except Exception:
-            log.exception("tg worker crashed")
+            while not self._shutdown.is_set():
+                # Create fresh stop event BEFORE entering _main so stop() always
+                # signals the correct event even if it races with _main().
+                self._stop_event = asyncio.Event()
+                t_start = _time.monotonic()
+                try:
+                    loop.run_until_complete(self._main())
+                except Exception:
+                    log.exception("tg worker crashed (attempt %d)", attempt)
+                if self._shutdown.is_set():
+                    break
+                # Reset backoff after a healthy connection (≥60s); else increment.
+                if _time.monotonic() - t_start >= 60:
+                    attempt = 0
+                else:
+                    attempt += 1
+                delay = _reconnect_delay(attempt)
+                log.info("reconnecting in %ds…", delay)
+                self.status.put("disconnected")
+                # Interruptible sleep — returns immediately if _shutdown is set.
+                self._shutdown.wait(timeout=delay)
         finally:
             self.status.put("disconnected")
             loop.close()
@@ -75,7 +97,6 @@ class TgWorker:
 
         client = TelegramClient(str(SESSION_PATH), c.api_id, c.api_hash)
         self._client = client
-        self._stop_event = asyncio.Event()
 
         await client.connect()
         if not await client.is_user_authorized():
@@ -286,3 +307,7 @@ def _display_name(obj: object) -> str:
     if title:
         return title
     return "(未知)"
+
+
+def _reconnect_delay(attempt: int) -> int:
+    return min(5 * (2 ** attempt), 120)
