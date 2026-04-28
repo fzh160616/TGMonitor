@@ -298,28 +298,28 @@ class TGMonitorApp(rumps.App):
 
     def _edit_keywords(self, _sender) -> None:
         w = rumps.Window(
-            message="每行一个关键词（大小写不敏感）：",
+            message="多个关键词用逗号分隔（大小写不敏感）：",
             title="编辑关键词",
-            default_text="\n".join(self.config.keywords),
+            default_text=", ".join(self.config.keywords),
             ok="保存", cancel="取消",
-            dimensions=(300, 200),
+            dimensions=(300, 60),
         )
         resp = w.run()
         if resp.clicked:
-            self.config.keywords = [k.strip() for k in resp.text.splitlines() if k.strip()]
+            self.config.keywords = [k.strip() for k in resp.text.split(",") if k.strip()]
             cfg.save(self.config)
 
     def _edit_excluded(self, _sender) -> None:
         w = rumps.Window(
-            message="每行填一个账号（@username 或纯数字 user_id）：",
+            message="多个账号用逗号分隔（@username 或纯数字 user_id）：",
             title="排除发言人",
-            default_text="\n".join(self.config.excluded_senders),
+            default_text=", ".join(self.config.excluded_senders),
             ok="保存", cancel="取消",
-            dimensions=(300, 180),
+            dimensions=(300, 60),
         )
         resp = w.run()
         if resp.clicked:
-            entries = [e.strip() for e in resp.text.splitlines() if e.strip()]
+            entries = [e.strip() for e in resp.text.split(",") if e.strip()]
             self.config.excluded_senders = entries
             cfg.save(self.config)
 
