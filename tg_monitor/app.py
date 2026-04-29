@@ -20,7 +20,7 @@ from .paths import (
 )
 from .store import Mention, Store
 from .tg_client import Hit, TgWorker
-from .ws_client import WsWorker
+from .ws_server import WsServer
 
 log = logging.getLogger(__name__)
 
@@ -107,11 +107,10 @@ class TGMonitorApp(rumps.App):
         self._status_q: "queue.Queue[str]" = queue.Queue()
         self.worker = TgWorker(self.hits, self._status_q)
 
-        # WebSocket cloud-sync worker (no-op when ws_url is empty)
-        self._ws_q: "queue.Queue[Mention]" = queue.Queue()
-        self._ws_worker = WsWorker(
-            ws_queue=self._ws_q,
-            get_url=lambda: cfg.load().ws_url,
+        # Local WebSocket server (no-op when ws_port == 0)
+        self._ws_server = WsServer(
+            get_port=lambda: cfg.load().ws_port,
+            get_host=lambda: cfg.load().ws_host,
         )
 
         # MenuItems for individual mentions, keyed by mention id, so we can
@@ -123,7 +122,7 @@ class TGMonitorApp(rumps.App):
         self._update_title()
 
         self.worker.start()
-        self._ws_worker.start()
+        self._ws_server.start()
 
         rumps.Timer(self._drain_hits, POLL_INTERVAL).start()
 
@@ -139,7 +138,7 @@ class TGMonitorApp(rumps.App):
         settings = rumps.MenuItem("设置")
         settings.add(rumps.MenuItem("编辑关键词…", callback=self._edit_keywords))
         settings.add(rumps.MenuItem("排除账号…", callback=self._edit_excluded))
-        settings.add(rumps.MenuItem("云同步地址…", callback=self._edit_ws_url))
+        settings.add(rumps.MenuItem("本地 WS 服务端口…", callback=self._edit_ws_port))
         self._launch_item = rumps.MenuItem(
             "开机自启", callback=self._toggle_launch_at_login
         )
@@ -282,13 +281,13 @@ class TGMonitorApp(rumps.App):
             sound=self.config.notification_sound,
             mention_id=mid,
         )
-        # Push to WS sync queue (no-op if ws_url is empty; WsWorker idles)
+        # Broadcast to all connected WS clients (no-op when no clients / port=0)
         try:
             m = self.store.get(mid)
             if m is not None:
-                self._ws_q.put(m)
+                self._ws_server.broadcast(m)
         except Exception:
-            log.exception("failed to enqueue mention id=%s for ws sync", mid)
+            log.exception("failed to broadcast mention id=%s", mid)
 
     # ------- menu callbacks -------
 
@@ -376,19 +375,41 @@ class TGMonitorApp(rumps.App):
             self.config.excluded_senders = entries
             cfg.save(self.config)
 
-    def _edit_ws_url(self, _sender) -> None:
+    def _edit_ws_port(self, _sender) -> None:
+        cur = self.config.ws_port
         w = rumps.Window(
-            message="WebSocket 地址（留空则不启用云同步）：",
-            title="云同步设置",
-            default_text=self.config.ws_url,
+            message=(
+                "本地 WebSocket 服务端口（0 = 不启用）。\n"
+                "其它客户端通过 ws://<本机IP>:<端口> 连入订阅提醒。\n"
+                "默认绑定 0.0.0.0（局域网可达）；如需仅本机，请改 config.json 的 ws_host=127.0.0.1。"
+            ),
+            title="本地 WebSocket 服务",
+            default_text=str(cur) if cur > 0 else "",
             ok="保存", cancel="取消",
-            dimensions=(350, 40),
+            dimensions=(360, 60),
         )
         self._bring_to_front()
         resp = w.run()
-        if resp.clicked:
-            self.config.ws_url = resp.text.strip()
-            cfg.save(self.config)
+        if not resp.clicked:
+            return
+        txt = resp.text.strip()
+        if not txt:
+            self.config.ws_port = 0
+        else:
+            try:
+                n = int(txt)
+                if not (1 <= n <= 65535):
+                    raise ValueError
+                self.config.ws_port = n
+            except ValueError:
+                self._bring_to_front()
+                rumps.alert(
+                    title="端口无效",
+                    message="请输入 1–65535 之间的整数，或留空关闭服务。",
+                    ok="知道了",
+                )
+                return
+        cfg.save(self.config)
 
     def _toggle_launch_at_login(self, sender) -> None:
         sender.state = not sender.state
@@ -429,7 +450,7 @@ class TGMonitorApp(rumps.App):
     def _quit(self, _sender) -> None:
         try:
             self.worker.stop()
-            self._ws_worker.stop()
+            self._ws_server.stop()
         finally:
             rumps.quit_application()
 

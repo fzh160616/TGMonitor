@@ -14,7 +14,8 @@ class Config:
     backfill_minutes: int = 5
     notification_sound: bool = True
     launch_at_login: bool = True
-    ws_url: str = ""  # WebSocket cloud-sync endpoint; empty = disabled
+    ws_port: int = 0           # 0 = local WS server disabled
+    ws_host: str = "0.0.0.0"   # 0.0.0.0 = LAN reachable; 127.0.0.1 = local only
 
 
 def load() -> Config:
@@ -29,7 +30,8 @@ def load() -> Config:
         backfill_minutes=int(raw.get("backfill_minutes", 5)),
         notification_sound=bool(raw.get("notification_sound", True)),
         launch_at_login=bool(raw.get("launch_at_login", True)),
-        ws_url=str(raw.get("ws_url", "")),
+        ws_port=int(raw.get("ws_port", 0)),
+        ws_host=str(raw.get("ws_host", "0.0.0.0")),
     )
 
 
