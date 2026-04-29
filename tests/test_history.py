@@ -6,7 +6,9 @@ def _mention(id=1, kind="mention", chat_title="Test", sender_name="Alice",
              text="hello", received_at=1700000000, seen_at=None, **kw):
     return Mention(
         id=id, tg_message_id=id, chat_id=10,
-        chat_title=chat_title, sender_id=50, sender_name=sender_name,
+        chat_title=chat_title, chat_username=kw.get("chat_username"),
+        sender_id=50, sender_name=sender_name,
+        sender_username=kw.get("sender_username"),
         text=text, kind=kind, matched_keyword=kw.get("matched_keyword"),
         received_at=received_at, seen_at=seen_at,
     )

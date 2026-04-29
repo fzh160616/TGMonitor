@@ -20,6 +20,7 @@ from .paths import (
 )
 from .store import Mention, Store
 from .tg_client import Hit, TgWorker
+from .ws_client import WsWorker
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +108,13 @@ class TGMonitorApp(rumps.App):
         self._status_q: "queue.Queue[str]" = queue.Queue()
         self.worker = TgWorker(self.hits, self._status_q)
 
+        # WebSocket cloud-sync worker (no-op when ws_url is empty)
+        self._ws_q: "queue.Queue[Mention]" = queue.Queue()
+        self._ws_worker = WsWorker(
+            ws_queue=self._ws_q,
+            get_url=lambda: cfg.load().ws_url,
+        )
+
         # MenuItems for individual mentions, keyed by mention id, so we can
         # rebuild without losing references.
         self._mention_items: Dict[int, rumps.MenuItem] = {}
@@ -116,6 +124,7 @@ class TGMonitorApp(rumps.App):
         self._update_title()
 
         self.worker.start()
+        self._ws_worker.start()
 
         rumps.Timer(self._drain_hits, POLL_INTERVAL).start()
 
@@ -131,6 +140,7 @@ class TGMonitorApp(rumps.App):
         settings = rumps.MenuItem("设置")
         settings.add(rumps.MenuItem("编辑关键词…", callback=self._edit_keywords))
         settings.add(rumps.MenuItem("排除账号…", callback=self._edit_excluded))
+        settings.add(rumps.MenuItem("云同步地址…", callback=self._edit_ws_url))
         self._launch_item = rumps.MenuItem(
             "开机自启", callback=self._toggle_launch_at_login
         )
@@ -234,8 +244,12 @@ class TGMonitorApp(rumps.App):
                 try:
                     self.store.insert(
                         tg_message_id=hit.tg_message_id, chat_id=hit.chat_id,
-                        chat_title=hit.chat_title, sender_id=hit.sender_id,
-                        sender_name=hit.sender_name, text=hit.text,
+                        chat_title=hit.chat_title,
+                        chat_username=hit.chat_username or None,
+                        sender_id=hit.sender_id,
+                        sender_name=hit.sender_name,
+                        sender_username=hit.sender_username or None,
+                        text=hit.text,
                         kind="error", matched_keyword=None,
                     )
                 except Exception:
@@ -250,8 +264,10 @@ class TGMonitorApp(rumps.App):
             tg_message_id=hit.tg_message_id,
             chat_id=hit.chat_id,
             chat_title=hit.chat_title,
+            chat_username=hit.chat_username or None,
             sender_id=hit.sender_id,
             sender_name=hit.sender_name,
+            sender_username=hit.sender_username or None,
             text=hit.text,
             kind=hit.result.kind,
             matched_keyword=hit.result.matched_keyword,
@@ -267,6 +283,13 @@ class TGMonitorApp(rumps.App):
             sound=self.config.notification_sound,
             mention_id=mid,
         )
+        # Push to WS sync queue (no-op if ws_url is empty; WsWorker idles)
+        try:
+            m = self.store.get(mid)
+            if m is not None:
+                self._ws_q.put(m)
+        except Exception:
+            log.exception("failed to enqueue mention id=%s for ws sync", mid)
 
     # ------- menu callbacks -------
 
@@ -354,6 +377,20 @@ class TGMonitorApp(rumps.App):
             self.config.excluded_senders = entries
             cfg.save(self.config)
 
+    def _edit_ws_url(self, _sender) -> None:
+        w = rumps.Window(
+            message="WebSocket 地址（留空则不启用云同步）：",
+            title="云同步设置",
+            default_text=self.config.ws_url,
+            ok="保存", cancel="取消",
+            dimensions=(350, 40),
+        )
+        self._bring_to_front()
+        resp = w.run()
+        if resp.clicked:
+            self.config.ws_url = resp.text.strip()
+            cfg.save(self.config)
+
     def _toggle_launch_at_login(self, sender) -> None:
         sender.state = not sender.state
         self.config.launch_at_login = bool(sender.state)
@@ -393,6 +430,7 @@ class TGMonitorApp(rumps.App):
     def _quit(self, _sender) -> None:
         try:
             self.worker.stop()
+            self._ws_worker.stop()
         finally:
             rumps.quit_application()
 

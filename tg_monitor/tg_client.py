@@ -32,6 +32,8 @@ class Hit:
     sender_name: str
     text: str
     result: MatchResult
+    chat_username: str = ""    # channel/group @handle
+    sender_username: str = ""  # sender @handle
 
 
 class TgWorker:
@@ -174,6 +176,9 @@ class TgWorker:
         if _is_excluded(raw_sender_id, sender_username, c.excluded_senders):
             return
 
+        chat_username = getattr(chat, "username", None) or ""
+        sender_handle = sender_username or ""
+
         hit = Hit(
             tg_message_id=event.message.id,
             chat_id=event.chat_id,
@@ -182,6 +187,8 @@ class TgWorker:
             sender_name=_display_name(sender),
             text=text,
             result=result,
+            chat_username=chat_username,
+            sender_username=sender_handle,
         )
         self.hits.put(hit)
 
@@ -262,6 +269,9 @@ class TgWorker:
         if _is_excluded(raw_sender_id, sender_username, c.excluded_senders):
             return
 
+        chat_username = getattr(chat, "username", None) or ""
+        sender_handle = sender_username or ""
+
         self.hits.put(Hit(
             tg_message_id=msg.id,
             chat_id=dialog.id,
@@ -270,6 +280,8 @@ class TgWorker:
             sender_name=_display_name(sender),
             text=text,
             result=result,
+            chat_username=chat_username,
+            sender_username=sender_handle,
         ))
 
 
