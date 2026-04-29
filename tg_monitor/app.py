@@ -140,11 +140,6 @@ class TGMonitorApp(rumps.App):
         settings.add(rumps.MenuItem("编辑关键词…", callback=self._edit_keywords))
         settings.add(rumps.MenuItem("排除账号…", callback=self._edit_excluded))
         settings.add(rumps.MenuItem("云同步地址…", callback=self._edit_ws_url))
-        self._launch_item = rumps.MenuItem(
-            "开机自启", callback=self._toggle_launch_at_login
-        )
-        self._launch_item.state = self.config.launch_at_login
-        settings.add(self._launch_item)
         self._sound_item = rumps.MenuItem(
             "通知声音", callback=self._toggle_sound
         )
