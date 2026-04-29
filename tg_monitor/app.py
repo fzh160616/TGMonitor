@@ -454,8 +454,20 @@ def _launchctl_load() -> None:
     if not LAUNCH_AGENT_PLIST.exists():
         log.warning("LaunchAgent plist missing: %s", LAUNCH_AGENT_PLIST)
         return
+    uid = _uid()
+    label = LAUNCH_AGENT_LABEL
+    # Unload first (ignore error if not loaded), then wait until gone
+    subprocess.run(["launchctl", "bootout", f"gui/{uid}/{label}"], check=False,
+                   capture_output=True)
+    import time as _time
+    for _ in range(10):
+        r = subprocess.run(["launchctl", "print", f"gui/{uid}/{label}"],
+                           capture_output=True)
+        if r.returncode != 0:
+            break
+        _time.sleep(1)
     subprocess.run(
-        ["launchctl", "bootstrap", f"gui/{_uid()}", str(LAUNCH_AGENT_PLIST)],
+        ["launchctl", "bootstrap", f"gui/{uid}", str(LAUNCH_AGENT_PLIST)],
         check=False,
     )
 

@@ -163,11 +163,25 @@ write_launch_agent() {
 </plist>
 PLIST
   mkdir -p "$LOG_DIR"
-  # bootout first in case an older copy is loaded; ignore error
-  launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+
+  # Unload the existing service if present.
+  # bootout is async — wait until launchd confirms it's gone before reloading.
+  if launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; then
+    launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+    local i=0
+    while launchctl print "gui/$(id -u)/${LABEL}" >/dev/null 2>&1; do
+      sleep 1
+      i=$((i + 1))
+      if [[ $i -ge 10 ]]; then
+        red "等待 LaunchAgent 卸载超时，请手动执行: launchctl bootout gui/$(id -u)/${LABEL}"
+        exit 1
+      fi
+    done
+  fi
+
   launchctl bootstrap "gui/$(id -u)" "$LAUNCH_AGENT"
   launchctl enable "gui/$(id -u)/${LABEL}" 2>/dev/null || true
-  launchctl kickstart -k "gui/$(id -u)/${LABEL}" 2>/dev/null || true
+  # RunAtLoad=true 已让 bootstrap 自动启动，不需要额外 kickstart
 }
 
 uninstall() {
