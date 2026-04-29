@@ -42,6 +42,7 @@ class TgWorker:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._client: Optional[TelegramClient] = None
         self._stop_event: Optional[asyncio.Event] = None
+        self._shutdown: threading.Event = threading.Event()
         self.me_id: int = 0
         self.me_username: Optional[str] = None
 
@@ -50,19 +51,40 @@ class TgWorker:
         self._thread.start()
 
     def stop(self) -> None:
+        self._shutdown.set()
         if self._loop and self._stop_event:
             self._loop.call_soon_threadsafe(self._stop_event.set)
         if self._thread:
             self._thread.join(timeout=5)
 
     def _run(self) -> None:
+        import time as _time
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
+        attempt = 0
         try:
-            loop.run_until_complete(self._main())
-        except Exception:
-            log.exception("tg worker crashed")
+            while not self._shutdown.is_set():
+                # Create fresh stop event BEFORE entering _main so stop() always
+                # signals the correct event even if it races with _main().
+                self._stop_event = asyncio.Event()
+                t_start = _time.monotonic()
+                try:
+                    loop.run_until_complete(self._main())
+                except Exception:
+                    log.exception("tg worker crashed (attempt %d)", attempt)
+                if self._shutdown.is_set():
+                    break
+                # Reset backoff after a healthy connection (≥60s); else increment.
+                if _time.monotonic() - t_start >= 60:
+                    attempt = 0
+                else:
+                    attempt += 1
+                delay = _reconnect_delay(attempt)
+                log.info("reconnecting in %ds…", delay)
+                self.status.put("disconnected")
+                # Interruptible sleep — returns immediately if _shutdown is set.
+                self._shutdown.wait(timeout=delay)
         finally:
             self.status.put("disconnected")
             loop.close()
@@ -75,7 +97,6 @@ class TgWorker:
 
         client = TelegramClient(str(SESSION_PATH), c.api_id, c.api_hash)
         self._client = client
-        self._stop_event = asyncio.Event()
 
         await client.connect()
         if not await client.is_user_authorized():
@@ -167,23 +188,26 @@ class TgWorker:
 
     async def _backfill(self, client: TelegramClient, minutes: int) -> None:
         import time as _time
+        c = cfg.load()  # load once for the entire backfill run
         cutoff = _time.time() - minutes * 60
-        log.info("backfill: scanning last %d min…", minutes)
+        limit = _backfill_limit(minutes)
+        log.info("backfill: scanning last %d min (limit=%d/dialog)…", minutes, limit)
         async for dialog in client.iter_dialogs():
+            if self._shutdown.is_set():
+                break
             try:
-                async for msg in client.iter_messages(dialog.id, limit=30):
+                async for msg in client.iter_messages(dialog.id, limit=limit):
                     if msg.date.timestamp() < cutoff:
-                        break
-                    await self._process_raw(client, msg, dialog)
+                        break  # iter_messages is newest-first; stop when too old
+                    await self._process_raw(client, msg, dialog, c)
             except Exception:
                 log.exception("backfill: error in dialog %s", dialog.id)
         log.info("backfill: done")
 
-    async def _process_raw(self, client: TelegramClient, msg, dialog) -> None:
+    async def _process_raw(self, client: TelegramClient, msg, dialog, c: "cfg.Config") -> None:
         """Process a raw Message from backfill (shares match logic with _handle)."""
         if msg.out:
             return
-        c = cfg.load()
         raw_sender_id = msg.sender_id or 0
 
         if _is_excluded(raw_sender_id, None, c.excluded_senders):
@@ -201,12 +225,24 @@ class TgWorker:
 
         is_private = isinstance(getattr(msg, "peer_id", None), PeerUser)
 
+        is_reply = _raw_is_reply(msg)
+        reply_sender_id: Optional[int] = None
+        if is_reply:
+            reply_msg_id = _raw_reply_msg_id(msg)
+            if reply_msg_id is not None:
+                try:
+                    replied = await client.get_messages(dialog.id, ids=reply_msg_id)
+                    # Use getattr: replied may be MessageEmpty (truthy, no sender_id)
+                    reply_sender_id = getattr(replied, "sender_id", None)
+                except Exception:
+                    log.debug("backfill: get reply msg failed msg_id=%s", reply_msg_id)
+
         result = match(MatchInput(
             is_private=is_private,
             text=text,
             entities=entities,
-            is_reply=False,
-            reply_sender_id=None,
+            is_reply=is_reply,
+            reply_sender_id=reply_sender_id,
             me_id=self.me_id,
             me_username=self.me_username,
             keywords=c.keywords,
@@ -286,3 +322,22 @@ def _display_name(obj: object) -> str:
     if title:
         return title
     return "(未知)"
+
+
+def _reconnect_delay(attempt: int) -> int:
+    return min(5 * (2 ** attempt), 120)
+
+
+def _backfill_limit(backfill_minutes: int) -> int:
+    return max(100, backfill_minutes * 20)
+
+
+def _raw_is_reply(msg: object) -> bool:
+    return getattr(msg, "reply_to", None) is not None
+
+
+def _raw_reply_msg_id(msg: object) -> Optional[int]:
+    rt = getattr(msg, "reply_to", None)
+    if rt is None:
+        return None
+    return getattr(rt, "reply_to_msg_id", None)

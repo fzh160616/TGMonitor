@@ -10,6 +10,7 @@ from typing import Dict
 import rumps
 
 from . import config as cfg
+from . import history as hist
 from . import notifier
 from .paths import (
     DATA_DIR,
@@ -95,9 +96,11 @@ def _render_badge_icon(count: int) -> str:
 
 class TGMonitorApp(rumps.App):
     def __init__(self) -> None:
+        global _app_instance
         icon = _icon_path()
         # If icon file exists use it (no title text); fall back to emoji
         super().__init__("" if icon else "🔔", icon=icon, quit_button=None)
+        _app_instance = self
         self.config = cfg.load()
         self.store = Store()
         self.hits: "queue.Queue[Hit]" = queue.Queue()
@@ -147,7 +150,9 @@ class TGMonitorApp(rumps.App):
 
         self.menu = [
             self._mentions_section,
-            None,  # separator
+            None,
+            rumps.MenuItem("查看历史…", callback=self._open_history),
+            None,
             settings,
             rumps.MenuItem("关于 TG Monitor", callback=self._about),
             None,
@@ -266,16 +271,18 @@ class TGMonitorApp(rumps.App):
     # ------- menu callbacks -------
 
     def _make_toggle_callback(self, mention_id: int):
-        """Click once to mark seen (removes ✓); click again to show full text."""
+        """First click: mark seen + open Telegram. Second click: show full text."""
         def _cb(sender) -> None:
             m = self.store.get(mention_id)
             if m is None:
                 return
             if m.seen_at is None:
-                # First click: mark as read, remove checkmark
+                # First click: mark as read and jump to Telegram
                 self.store.mark_seen(mention_id)
                 sender.state = 0
                 self._update_title()
+                url = _tg_message_url(m.chat_id, m.tg_message_id)
+                subprocess.Popen(["open", url])
             else:
                 # Already read: show full detail
                 ts = datetime.fromtimestamp(m.received_at).strftime("%Y-%m-%d %H:%M:%S")
@@ -297,6 +304,9 @@ class TGMonitorApp(rumps.App):
     def _bring_to_front() -> None:
         from AppKit import NSApp
         NSApp.activateIgnoringOtherApps_(True)
+
+    def _open_history(self, _sender) -> None:
+        hist.open_history(self.store)
 
     def _mark_all_read(self, _sender) -> None:
         self.store.mark_all_seen()
@@ -399,6 +409,10 @@ def _label(m: Mention) -> str:
     return f"{badge} {ts}  {m.chat_title} · {m.sender_name}  {snippet}"
 
 
+def _tg_message_url(chat_id: int, tg_message_id: int) -> str:
+    return f"tg://openmessage?chat_id={chat_id}&message_id={tg_message_id}"
+
+
 def _launchctl_load() -> None:
     if not LAUNCH_AGENT_PLIST.exists():
         log.warning("LaunchAgent plist missing: %s", LAUNCH_AGENT_PLIST)
@@ -421,3 +435,33 @@ def _launchctl_unload() -> None:
 def _uid() -> int:
     import os
     return os.getuid()
+
+
+_app_instance: "TGMonitorApp | None" = None
+
+
+@rumps.notifications
+def _on_notification_click(info) -> None:
+    # rumps passes a Notification object that maps directly to the data dict
+    # passed as data= to rumps.notification(). info["mention_id"] is correct —
+    # there is NO nested "data" key.
+    global _app_instance
+    if _app_instance is None:
+        return
+    try:
+        mention_id = info.get("mention_id")
+    except Exception:
+        return
+    if mention_id is None:
+        return
+    m = _app_instance.store.get(mention_id)
+    if m is None:
+        return
+    if m.seen_at is None:
+        _app_instance.store.mark_seen(mention_id)
+        item = _app_instance._mention_items.get(mention_id)
+        if item:
+            item.state = 0
+        _app_instance._update_title()
+    url = _tg_message_url(m.chat_id, m.tg_message_id)
+    subprocess.Popen(["open", url])
