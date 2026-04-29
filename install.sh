@@ -116,7 +116,16 @@ create_venv_install() {
     "$VENV_DIR/bin/Info.plist" 2>/dev/null || true
 }
 
+stop_running() {
+  # 停掉正在运行的 tg_monitor，否则 Telethon session 文件会被锁住
+  if pkill -f "tg_monitor" 2>/dev/null; then
+    info "已停止运行中的 tg-monitor 进程，等待退出…"
+    sleep 2
+  fi
+}
+
 run_login() {
+  stop_running
   info "进入 Telegram 登录流程"
   "$VENV_DIR/bin/tg-monitor-login"
 }
