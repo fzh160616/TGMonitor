@@ -7,10 +7,9 @@ set -euo pipefail
 #   ./install.sh             install / re-install
 #   ./install.sh --uninstall remove LaunchAgent and (with confirmation) data
 #
-# api_id / api_hash discovery order:
-#   1. TG_MONITOR_API_ID + TG_MONITOR_API_HASH env vars
-#   2. ./creds.env (shell file: API_ID=... API_HASH=...)
-#   3. abort
+# api_id / api_hash 在安装时交互输入；也可预先导出环境变量跳过提示：
+#   export TG_MONITOR_API_ID=12345678
+#   export TG_MONITOR_API_HASH=abcdef0123456789abcdef0123456789
 
 APP_NAME="TGMonitor"
 LABEL="com.tgmonitor.agent"
@@ -47,21 +46,44 @@ ensure_uv() {
   fi
 }
 
-load_creds() {
+prompt_creds() {
+  # 优先使用环境变量（方便自动化部署）
   if [[ -n "${TG_MONITOR_API_ID:-}" && -n "${TG_MONITOR_API_HASH:-}" ]]; then
     API_ID="$TG_MONITOR_API_ID"
     API_HASH="$TG_MONITOR_API_HASH"
+    info "已从环境变量读取 API_ID / API_HASH。"
     return
   fi
-  if [[ -f "$SCRIPT_DIR/creds.env" ]]; then
-    # shellcheck disable=SC1091
-    source "$SCRIPT_DIR/creds.env"
+
+  # 若 config.json 已有凭据，询问是否沿用
+  local cfg="$DATA_DIR/config.json"
+  if [[ -f "$cfg" ]]; then
+    local saved_id saved_hash
+    saved_id=$(python3 -c "import json; d=json.load(open('$cfg')); print(d.get('api_id',''))" 2>/dev/null || true)
+    saved_hash=$(python3 -c "import json; d=json.load(open('$cfg')); print(d.get('api_hash',''))" 2>/dev/null || true)
+    if [[ -n "$saved_id" && "$saved_id" != "0" && -n "$saved_hash" ]]; then
+      printf '\n已检测到已保存的凭据 (api_id=%s)。\n' "$saved_id"
+      read -r -p "直接沿用已保存的凭据? [Y/n] " yn
+      if [[ ! "$yn" =~ ^[Nn]$ ]]; then
+        API_ID="$saved_id"
+        API_HASH="$saved_hash"
+        return
+      fi
+    fi
   fi
-  if [[ -z "${API_ID:-}" || -z "${API_HASH:-}" ]]; then
-    red "未提供 API_ID / API_HASH。"
-    info "请向同事拿到 creds.env 放在脚本同目录,或导出环境变量 TG_MONITOR_API_ID/TG_MONITOR_API_HASH。"
-    exit 1
-  fi
+
+  # 交互输入
+  printf '\n请输入 Telegram API 凭据（从 https://my.telegram.org 申请）：\n'
+  while true; do
+    read -r -p "  API_ID  (纯数字): " API_ID
+    [[ "$API_ID" =~ ^[0-9]+$ ]] && break
+    red "  API_ID 必须是纯数字，请重新输入。"
+  done
+  while true; do
+    read -r -p "  API_HASH (32位字母数字): " API_HASH
+    [[ -n "$API_HASH" ]] && break
+    red "  API_HASH 不能为空，请重新输入。"
+  done
 }
 
 write_config() {
@@ -162,7 +184,7 @@ main() {
   require_macos
   ensure_uv
   mkdir -p "$DATA_DIR" "$LOG_DIR"
-  load_creds
+  prompt_creds
   write_config
   create_venv_install
   run_login

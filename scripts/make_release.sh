@@ -12,14 +12,8 @@ mkdir -p "$DIST"
 rsync -a \
   --exclude='.venv' --exclude='__pycache__' --exclude='dist' \
   --exclude='.git'  --exclude='*.pyc'       --exclude='.DS_Store' \
-  --exclude='*.egg-info' \
+  --exclude='*.egg-info' --exclude='creds.env' \
   "$ROOT/" "$DIST/"
-
-if [[ ! -f "$ROOT/creds.env" ]]; then
-  echo "❌ 缺少 creds.env，请先创建后再打包。"
-  exit 1
-fi
-cp "$ROOT/creds.env" "$DIST/"
 
 (cd "$ROOT/dist" && zip -r "tg-monitor-${VERSION}.zip" "tg-monitor-${VERSION}")
 echo "✅ 打包完成: dist/tg-monitor-${VERSION}.zip"
