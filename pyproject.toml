@@ -26,3 +26,4 @@ testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["tg_monitor"]
+include = ["tg_monitor/*.png"]

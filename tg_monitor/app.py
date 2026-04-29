@@ -27,8 +27,7 @@ log = logging.getLogger(__name__)
 RECENT_LIMIT = 20
 POLL_INTERVAL = 0.2
 
-_RESOURCES = pathlib.Path(__file__).parent.parent / "resources"
-_ICON_DEFAULT = str(_RESOURCES / "TGMonitor.png")
+_ICON_DEFAULT = str(pathlib.Path(__file__).parent / "TGMonitor.png")
 _BADGE_CACHE  = str(pathlib.Path(tempfile.gettempdir()) / "tgmonitor_badge.png")
 
 
