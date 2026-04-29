@@ -147,7 +147,7 @@ class WsWorker:
             ensure_ascii=False,
         )
         await ws.send(msg)
-        log.info("ws batch sent %d mentions", len(mentions))
+        log.info("ws batch sent %d mentions: %s", len(mentions), msg)
 
     async def _pump(self, ws) -> None:
         """Drain the queue, forwarding each Mention as a single WS message."""
@@ -167,7 +167,7 @@ class WsWorker:
                     ensure_ascii=False,
                 )
                 await ws.send(msg)
-                log.debug("ws sent mention id=%s", getattr(mention, "id", "?"))
+                log.info("ws sent mention: %s", msg)
             except Exception:
                 # On send failure, requeue this mention so the next reconnect
                 # batch (or later pump) can pick it up, then bubble up to

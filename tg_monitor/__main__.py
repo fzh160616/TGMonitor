@@ -1,8 +1,29 @@
+import fcntl
 import logging
+import sys
 from logging.handlers import RotatingFileHandler
 
 from .app import TGMonitorApp
-from .paths import LOG_PATH, ensure_dirs
+from .paths import DATA_DIR, LOG_PATH, ensure_dirs
+
+# File-descriptor kept open for the entire process lifetime; the OS releases
+# the exclusive lock automatically when the process exits (even on crash).
+_lock_fd = None
+
+
+def _acquire_lock() -> bool:
+    """Return True if this process is the only running instance, False otherwise."""
+    global _lock_fd
+    ensure_dirs()
+    lock_path = DATA_DIR / "tg-monitor.lock"
+    fd = open(lock_path, "w")  # noqa: SIM115
+    try:
+        fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fd.close()
+        return False
+    _lock_fd = fd  # keep alive until process exits
+    return True
 
 
 def _setup_logging() -> None:
@@ -19,6 +40,9 @@ def _setup_logging() -> None:
 
 
 def main() -> None:
+    if not _acquire_lock():
+        print("tg-monitor is already running. Exiting.", flush=True)
+        sys.exit(0)
     _setup_logging()
     logging.getLogger(__name__).info("starting tg-monitor")
     TGMonitorApp().run()
