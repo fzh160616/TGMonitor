@@ -211,13 +211,12 @@ main() {
   write_config
   create_venv_install
   run_login
-  # write_launch_agent  # LaunchAgent 功能暂时禁用
+  write_launch_agent
 
   green ""
   green "=== 安装完成 ==="
   info "菜单栏会出现 🔔 图标。"
   info "首次发系统通知时,macOS 会提示授权,请允许。"
-  info "启动方式: $VENV_DIR/bin/python -m tg_monitor"
   info "数据目录: $DATA_DIR"
   info "日志:      $LOG_DIR/tg-monitor.log"
   info "卸载:      $SCRIPT_DIR/install.sh --uninstall"
